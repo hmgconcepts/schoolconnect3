@@ -189,6 +189,7 @@ const Generator = {
     zip.file('notifications.html', T.notifications(cfg));
     zip.file('about.html',         Generator.pageAbout(cfg));
     zip.file('contact.html',       Generator.pageContact(cfg));
+    zip.file('feature-guide.html', Generator.pageFeatureGuide(cfg)); // full feature explanations
 
     /* ✨ v2 dedicated, fully-featured pages */
     zip.file('cbt.html',           Generator.pageCBT(cfg));          // teacher exam manager
@@ -719,32 +720,83 @@ const App = {
   },
 
   async loadDashboard() {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    const safeCount = async (table, filterFn) => {
+      if (!sb) return 0;
+      try {
+        let q = sb.from(table).select('id', { count: 'exact', head: true });
+        if (filterFn) q = filterFn(q);
+        const r = await q;
+        return r && !r.error ? (r.count || 0) : 0;
+      } catch (_) { return 0; }
+    };
+    const safeRows = async (table, select='*', limit=5, order='created_at') => {
+      if (!sb) return [];
+      try {
+        let q = sb.from(table).select(select);
+        if (order) q = q.order(order, { ascending:false });
+        if (limit) q = q.limit(limit);
+        const r = await q;
+        return r && !r.error ? (r.data || []) : [];
+      } catch (_) { return []; }
+    };
     try {
-      const [students, staff, fees, announcements, polls] = await Promise.all([
-        sb.from('students').select('id', { count: 'exact', head: true }),
-        sb.from('staff').select('id',     { count: 'exact', head: true }),
-        sb.from('fee_payments').select('amount_paid'),
-        sb.from('announcements').select('*').order('created_at', { ascending: false }).limit(5),
-        sb.from('polls').select('*').eq('status','open').order('created_at',{ascending:false}).limit(3)
+      const [studentCount, staffCount, feeRows, announcements, openPolls,
+             attendanceCount, cbtCount, resultCount, parentCount, complaintCount,
+             applicationCount, messageCount, assignmentCount, behaviourCount,
+             supportCount, libraryCount, payrollCount, inventoryCount] = await Promise.all([
+        safeCount('students'),
+        safeCount('staff'),
+        safeRows('fee_payments', 'amount_paid', 500, null),
+        safeRows('announcements', '*', 5, 'created_at'),
+        safeRows('polls', '*', 3, 'created_at'),
+        safeCount('attendance'),
+        safeCount('cbt_exams'),
+        safeCount('results'),
+        safeCount('parent_student'),
+        safeCount('complaints'),
+        safeCount('admission_applications'),
+        safeCount('messages'),
+        safeCount('assignments'),
+        safeCount('behaviour'),
+        safeCount('support_plans'),
+        safeCount('library'),
+        safeCount('payroll'),
+        safeCount('inventory')
       ]);
-      const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-      set('stat-students', students.count || 0);
-      set('stat-staff', staff.count || 0);
-      set('stat-fees', (fees.data || []).reduce((a,b) => a + (b.amount_paid || 0), 0).toLocaleString());
-      set('stat-announcements', (announcements.data || []).length);
+      const feesPaid = (feeRows || []).reduce((a,b) => a + (Number(b.amount_paid) || 0), 0);
+      set('stat-students', studentCount);
+      set('stat-staff', staffCount);
+      set('stat-fees', feesPaid.toLocaleString());
+      set('stat-announcements', announcements.length);
+      // Admin/Super Admin oversight KPIs. These IDs exist only on the admin dashboard.
+      set('ov-staff-count', staffCount);
+      set('ov-attendance', attendanceCount);
+      set('ov-cbt-open', cbtCount);
+      set('ov-results', resultCount);
+      set('ov-parent-fees', feeRows.length);
+      set('ov-payroll', payrollCount);
+      set('ov-inventory', inventoryCount);
+      set('ov-parents', parentCount);
+      set('ov-complaints', complaintCount);
+      set('ov-applications', applicationCount);
+      set('ov-messages', messageCount);
+      set('ov-assignments', assignmentCount);
+      set('ov-behaviour', behaviourCount);
+      set('ov-support', supportCount);
+      set('ov-library', libraryCount);
       const annEl = document.getElementById('dash-announcements');
-      if (annEl) annEl.innerHTML = (announcements.data || []).length
-        ? announcements.data.map(a => '<div style="padding:10px 0;border-bottom:1px solid var(--gray-200)"><strong>'+esc(a.title)+'</strong><div style="font-size:0.82rem;color:var(--gray-500)">'+new Date(a.created_at).toLocaleString()+'</div></div>').join('')
+      if (annEl) annEl.innerHTML = announcements.length
+        ? announcements.map(a => '<div style="padding:10px 0;border-bottom:1px solid var(--gray-200)"><strong>'+esc(a.title)+'</strong><div style="font-size:0.82rem;color:var(--gray-500)">'+(a.created_at ? new Date(a.created_at).toLocaleString() : '')+'</div></div>').join('')
         : '<p style="color:var(--gray-500)">No announcements yet.</p>';
       const pollEl = document.getElementById('dash-polls');
-      if (pollEl) pollEl.innerHTML = (polls.data || []).length
-        ? polls.data.map(p => '<div style="padding:10px 0;border-bottom:1px solid var(--gray-200)"><a href="voting.html?poll='+p.id+'"><strong>'+esc(p.title)+'</strong></a><span class="badge badge-success" style="margin-left:8px">open</span></div>').join('')
+      if (pollEl) pollEl.innerHTML = openPolls.length
+        ? openPolls.map(p => '<div style="padding:10px 0;border-bottom:1px solid var(--gray-200)"><a href="voting.html?poll='+p.id+'"><strong>'+esc(p.title)+'</strong></a><span class="badge badge-success" style="margin-left:8px">open</span></div>').join('')
         : '<p style="color:var(--gray-500)">No active polls.</p>';
-      // Chart
       const ctx = document.getElementById('dash-chart');
       if (ctx && window.Chart) {
-        var _sc = (students.count || 0), _fp = (fees.data || []).length;
-        new Chart(ctx, { type: 'doughnut', data: { labels:['Paid','Pending'], datasets:[{ data:[_fp, Math.max(0, _sc - _fp)], backgroundColor:['#10b981','#e2e8f0'] }] }, options: { responsive:true, plugins:{ legend:{ position:'bottom' } } } });
+        var _sc = Number(studentCount || 0), _fp = Number(feeRows.length || 0);
+        new Chart(ctx, { type: 'doughnut', data: { labels:['Payment rows','Students without payment row'], datasets:[{ data:[_fp, Math.max(0, _sc - _fp)], backgroundColor:['#10b981','#e2e8f0'] }] }, options: { responsive:true, plugins:{ legend:{ position:'bottom' } } } });
       }
     } catch (e) { console.warn('Dashboard load failed (demo mode):', e.message); }
   },
@@ -2368,6 +2420,50 @@ const AR={ rows:[],
 </script></body></html>`);
   },
   /* Simple public contact page for generated school sites */
+  pageFeatureGuide(cfg) {
+    const extras = [
+      { id:'dashboard', name:'Dashboard & Role Portals', desc:'Role-specific dashboards for admin/super-admin, staff, parents and students.' },
+      { id:'feature-guide', name:'Feature Guide', desc:'Detailed explanation of every module and how to deploy/use the system.' },
+      { id:'student-profile', name:'Student / Parent 360 Profile', desc:'Complete learner record, fees, attendance, results and support view.' },
+      { id:'cbt-exam', name:'Public CBT / Entrance Exam', desc:'Anonymous or student assessment page for tests and entrance exams.' }
+    ];
+    const mods = [...extras, ...(window.SC.MODULES || [])];
+    const unique = [];
+    const seen = new Set();
+    mods.forEach(m => { if (!seen.has(m.id)) { seen.add(m.id); unique.push(m); } });
+    const card = (m) => {
+      const g = T.PAGE_GUIDE[m.id] || {};
+      const steps = Array.isArray(g.steps) && g.steps.length ? g.steps : ['Open the page from the navigator.', 'Use the action buttons at the top of the page.', 'Export or print records where available.'];
+      return `<div class="card" style="margin-bottom:14px">
+        <h3>${T.iconFor(m.id)} ${T.esc(T.labelFor(m.id, m.name))}</h3>
+        <p><strong>What it does:</strong> ${T.esc(g.what || m.desc || 'A School Connect feature for managing this part of school operations.')}</p>
+        <p><strong>Who uses it:</strong> ${T.esc(g.who || T.roleAllow(m.id).replace(/_/g,' '))}</p>
+        <p><strong>How to use it:</strong></p>
+        <ol style="margin:0 0 10px 20px;color:var(--gray-700);line-height:1.7">${steps.map(x => '<li>'+x+'</li>').join('')}</ol>
+        ${g.advantages ? `<p><strong>Advantages:</strong></p><ul style="margin:0 0 10px 20px;color:var(--gray-700);line-height:1.7">${g.advantages.map(x => '<li>'+x+'</li>').join('')}</ul>` : ''}
+        ${g.benefit ? `<p><strong>Benefit:</strong> ${T.esc(g.benefit)}</p>` : ''}
+        <a class="btn btn-outline btn-sm" href="${T.esc(m.id)}.html">Open ${T.esc(T.labelFor(m.id, m.name))}</a>
+      </div>`;
+    };
+    const body = `
+      <div class="card" style="margin-bottom:18px;background:#eef2ff;border-color:#c7d2fe">
+        <h2 style="margin-top:0">📘 Complete School Connect Feature Guide</h2>
+        <p style="color:var(--gray-700)">This page explains every feature in plain language: what it does, who uses it, how to use it, advantages and school benefit. It uses no paid AI API and is generated free with the school site.</p>
+        <div class="grid grid-4" style="margin-top:12px">
+          <div class="stat-card"><div class="stat-value">${unique.length}</div><div class="stat-label">Documented Pages</div></div>
+          <div class="stat-card"><div class="stat-value">Free</div><div class="stat-label">No AI API Required</div></div>
+          <div class="stat-card"><div class="stat-value">PWA</div><div class="stat-label">Installable</div></div>
+          <div class="stat-card"><div class="stat-value">RLS</div><div class="stat-label">Supabase Security</div></div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:18px">
+        <h3>🏛️ Admin / Super Admin oversight model</h3>
+        <p>Admin and Super Admin get the admin dashboard plus overview cards of staff, parent/payment and student dashboards for management, supervision, payment tracking and safeguarding. Staff, parents and students still see only their own dashboards.</p>
+      </div>
+      ${unique.map(card).join('')}`;
+    return T.shell(cfg, 'Feature Guide', body, { requireRole:'any' });
+  },
+
   pageContact(cfg) {
     return `${T.head(cfg, 'Contact')}${T.bellAndBanner(cfg)}${T.modal()}
 <div style="min-height:100vh;background:var(--gray-100);padding:32px">
